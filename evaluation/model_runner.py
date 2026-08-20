@@ -1,9 +1,12 @@
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 import time
 
 import numpy as np
 import torch
+
+from .dinov3_backbone import DINOv3PatchEmbed, load_dinov3_vitl16
 
 
 @dataclass
@@ -13,16 +16,39 @@ class Prediction:
     inference_ms: float
 
 
+def configure_backbone(model, backbone, preprocess_fn, dinov3_repo=None, dinov3_weights=None,
+                       dinov3_loader=load_dinov3_vitl16):
+    if backbone == "dinov2":
+        return preprocess_fn, 518, 14
+    if backbone != "dinov3":
+        raise ValueError(f"Unsupported backbone: {backbone}")
+    if not dinov3_repo or not dinov3_weights:
+        raise ValueError("dinov3_repo and dinov3_weights are required for the DINOv3 backbone")
+
+    dinov3 = dinov3_loader(dinov3_repo, dinov3_weights)
+    model.aggregator.patch_embed = DINOv3PatchEmbed(dinov3)
+    model.aggregator.patch_size = 16
+    preprocess = partial(preprocess_fn, target_size=592, patch_size=16)
+    return preprocess, 592, 16
+
+
 class VGGTModelRunner:
-    def __init__(self, model, device, dtype, preprocess_fn, pose_decode_fn):
+    def __init__(self, model, device, dtype, preprocess_fn, pose_decode_fn, backbone="dinov2",
+                 input_target_size=518, patch_size=14):
         self.device = torch.device(device)
         self.dtype = dtype
         self.model = model.eval().to(self.device)
+        if hasattr(self.model, "requires_grad_"):
+            self.model.requires_grad_(False)
         self.preprocess_fn = preprocess_fn
         self.pose_decode_fn = pose_decode_fn
+        self.backbone = backbone
+        self.input_target_size = input_target_size
+        self.patch_size = patch_size
 
     @classmethod
-    def from_pretrained(cls, model_source="facebook/VGGT-1B", device=None):
+    def from_pretrained(cls, model_source="facebook/VGGT-1B", device=None, backbone="dinov2",
+                        dinov3_repo=None, dinov3_weights=None):
         from vggt.models.vggt import VGGT
         from vggt.utils.load_fn import load_and_preprocess_images
         from vggt.utils.pose_enc import pose_encoding_to_extri_intri
@@ -38,13 +64,21 @@ class VGGTModelRunner:
         else:
             model = VGGT.from_pretrained(model_source)
 
+        preprocess_fn, input_target_size, patch_size = configure_backbone(
+            model, backbone, load_and_preprocess_images, dinov3_repo=dinov3_repo,
+            dinov3_weights=dinov3_weights,
+        )
+
         if device.type == "cuda":
             major = torch.cuda.get_device_capability(device)[0]
             dtype = torch.bfloat16 if major >= 8 else torch.float16
         else:
             dtype = torch.float32
 
-        return cls(model, device, dtype, load_and_preprocess_images, pose_encoding_to_extri_intri)
+        return cls(
+            model, device, dtype, preprocess_fn, pose_encoding_to_extri_intri, backbone=backbone,
+            input_target_size=input_target_size, patch_size=patch_size,
+        )
 
     def _camera_forward(self, images):
         images = images.unsqueeze(0)

@@ -1,10 +1,14 @@
 import numpy as np
 import torch
 
-from evaluation.model_runner import VGGTModelRunner
+from evaluation.model_runner import VGGTModelRunner, configure_backbone
 
 
 class FakeAggregator:
+    def __init__(self):
+        self.patch_embed = object()
+        self.patch_size = 14
+
     def __call__(self, images):
         return [images], 0
 
@@ -28,7 +32,13 @@ class FakeModel:
         return self
 
 
-def fake_preprocess(paths):
+class FakeDINOv3(torch.nn.Module):
+    def forward_features(self, images):
+        return {"x_norm_patchtokens": torch.zeros(images.shape[0], 4, 1024)}
+
+
+def fake_preprocess(paths, **kwargs):
+    fake_preprocess.kwargs = kwargs
     return torch.zeros(len(paths), 3, 14, 14)
 
 
@@ -54,3 +64,30 @@ def test_runner_executes_camera_only_path_and_returns_timings():
     assert np.allclose(prediction.extrinsics[:, :3, :3], np.eye(3)[None])
     assert prediction.preprocess_ms >= 0
     assert prediction.inference_ms >= 0
+
+
+def test_configure_backbone_keeps_dinov2_defaults():
+    model = FakeModel()
+    original_patch_embed = model.aggregator.patch_embed
+    preprocess, target_size, patch_size = configure_backbone(model, "dinov2", fake_preprocess)
+
+    preprocess(["x.jpg"])
+    assert model.aggregator.patch_embed is original_patch_embed
+    assert model.aggregator.patch_size == 14
+    assert fake_preprocess.kwargs == {}
+    assert (target_size, patch_size) == (518, 14)
+
+
+def test_configure_backbone_replaces_only_patch_encoder_for_dinov3():
+    model = FakeModel()
+    camera_head = model.camera_head
+    preprocess, target_size, patch_size = configure_backbone(
+        model, "dinov3", fake_preprocess, dinov3_repo="repo", dinov3_weights="weights",
+        dinov3_loader=lambda repo, weights: FakeDINOv3(),
+    )
+
+    preprocess(["x.jpg"])
+    assert model.camera_head is camera_head
+    assert model.aggregator.patch_size == 16
+    assert fake_preprocess.kwargs == {"target_size": 592, "patch_size": 16}
+    assert (target_size, patch_size) == (592, 16)
