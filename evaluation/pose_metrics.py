@@ -52,6 +52,8 @@ def calculate_auc_np(r_error, t_error, max_threshold=30):
     t_error = np.asarray(t_error, dtype=np.float64)
     if len(r_error) == 0 or len(r_error) != len(t_error):
         raise ValueError("Rotation and translation errors must be non-empty and equally sized")
+    if not np.isfinite(r_error).all() or not np.isfinite(t_error).all():
+        raise ValueError("Rotation and translation errors must be finite")
 
     max_errors = np.maximum(r_error, t_error)
     bins = np.arange(max_threshold + 1)
