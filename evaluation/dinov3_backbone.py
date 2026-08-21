@@ -7,10 +7,14 @@ DINOV3_PATCH_SIZE = 16
 
 
 class DINOv3PatchEmbed(nn.Module):
-    def __init__(self, backbone):
+    def __init__(self, backbone, adapter=None):
         super().__init__()
         self.backbone = backbone.eval()
         self.backbone.requires_grad_(False)
+        self.adapter = adapter
+        if self.adapter is not None:
+            self.adapter = self.adapter.eval()
+            self.adapter.requires_grad_(False)
 
     def forward(self, images):
         outputs = self.backbone(pixel_values=images)
@@ -28,6 +32,10 @@ class DINOv3PatchEmbed(nn.Module):
                 f"Expected {expected_patches} DINOv3 patch tokens for input {tuple(images.shape[-2:])}, "
                 f"got {patch_tokens.shape[1]}"
             )
+        if self.adapter is not None:
+            patch_tokens = self.adapter(patch_tokens)
+        if patch_tokens.shape[-1] != DINOV3_HIDDEN_SIZE:
+            raise ValueError(f"DINOv3 adapter must preserve feature size {DINOV3_HIDDEN_SIZE}")
         return patch_tokens
 
 
