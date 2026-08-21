@@ -19,13 +19,29 @@ class FakeHFDINOv3(torch.nn.Module):
         return SimpleNamespace(last_hidden_state=torch.cat([special, patches], dim=1))
 
 
+class ScaleAdapter(torch.nn.Module):
+    def forward(self, features):
+        return features * 2
+
+
 def test_adapter_strips_cls_and_register_tokens_and_freezes_weights():
-    adapter = DINOv3PatchEmbed(FakeHFDINOv3())
-    output = adapter(torch.zeros(2, 3, 32, 48))
+    wrapper = DINOv3PatchEmbed(FakeHFDINOv3())
+    output = wrapper(torch.zeros(2, 3, 32, 48))
 
     assert output.shape == (2, 6, 1024)
     assert torch.all(output == 1)
-    assert all(not parameter.requires_grad for parameter in adapter.parameters())
+    assert all(not parameter.requires_grad for parameter in wrapper.parameters())
+
+
+def test_wrapper_applies_and_freezes_feature_adapter():
+    adapter = ScaleAdapter()
+    wrapper = DINOv3PatchEmbed(FakeHFDINOv3(), adapter=adapter)
+    output = wrapper(torch.zeros(2, 3, 32, 48))
+
+    assert output.shape == (2, 6, 1024)
+    assert torch.all(output == 2)
+    assert wrapper.adapter is adapter
+    assert all(not parameter.requires_grad for parameter in wrapper.parameters())
 
 
 def test_loader_uses_huggingface_auto_model(monkeypatch):
