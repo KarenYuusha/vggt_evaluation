@@ -1,9 +1,42 @@
 --extra-index-url https://download.pytorch.org/whl/cu121
 
+# PyTorch / CUDA 12.1
 torch==2.3.1
 torchvision==0.18.1
+
+# Numerical / scientific computing
 numpy==1.26.1
-Pillow
-huggingface_hub
+scipy
 einops
+
+# Image / vision
+Pillow
+opencv-python
+matplotlib
+
+# Hugging Face / DINOv3
+transformers>=4.56.0,<5.0.0
+huggingface_hub
 safetensors
+
+# Configuration
+hydra-core
+omegaconf
+
+# 3D / visualization
+trimesh
+viser==0.2.23
+
+# Inference
+onnxruntime
+
+# Web / demo
+gradio==5.17.1
+pydantic==2.10.6
+
+# Utilities
+requests
+tqdm
+
+# Testing
+pytest
