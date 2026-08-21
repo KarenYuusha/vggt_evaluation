@@ -6,6 +6,7 @@ import time
 import numpy as np
 import torch
 
+from adapter.model import load_adapter_checkpoint
 from .dinov3_backbone import DINOv3PatchEmbed, load_dinov3_vitl16
 
 
@@ -16,14 +17,25 @@ class Prediction:
     inference_ms: float
 
 
-def configure_backbone(model, backbone, preprocess_fn, dinov3_loader=load_dinov3_vitl16):
+def configure_backbone(model, backbone, preprocess_fn, adapter_checkpoint=None,
+                       dinov3_loader=load_dinov3_vitl16, adapter_loader=load_adapter_checkpoint):
     if backbone == "dinov2":
+        if adapter_checkpoint is not None:
+            raise ValueError("Adapter checkpoints are only valid with the DINOv3 backbone")
         return preprocess_fn, 518, 14
     if backbone != "dinov3":
         raise ValueError(f"Unsupported backbone: {backbone}")
 
     dinov3 = dinov3_loader()
-    model.aggregator.patch_embed = DINOv3PatchEmbed(dinov3)
+    adapter = None
+    if adapter_checkpoint is not None:
+        adapter, _ = adapter_loader(adapter_checkpoint)
+        if getattr(adapter, "dim", 1024) != 1024:
+            raise ValueError("DINOv3 adapter must be 1024 -> 1024")
+        adapter.eval()
+        adapter.requires_grad_(False)
+
+    model.aggregator.patch_embed = DINOv3PatchEmbed(dinov3, adapter=adapter)
     model.aggregator.patch_size = 16
     preprocess = partial(preprocess_fn, target_size=592, patch_size=16)
     return preprocess, 592, 16
@@ -44,7 +56,8 @@ class VGGTModelRunner:
         self.patch_size = patch_size
 
     @classmethod
-    def from_pretrained(cls, model_source="facebook/VGGT-1B", device=None, backbone="dinov2"):
+    def from_pretrained(cls, model_source="facebook/VGGT-1B", device=None, backbone="dinov2",
+                        adapter_checkpoint=None):
         from vggt.models.vggt import VGGT
         from vggt.utils.load_fn import load_and_preprocess_images
         from vggt.utils.pose_enc import pose_encoding_to_extri_intri
@@ -61,7 +74,7 @@ class VGGTModelRunner:
             model = VGGT.from_pretrained(model_source)
 
         preprocess_fn, input_target_size, patch_size = configure_backbone(
-            model, backbone, load_and_preprocess_images
+            model, backbone, load_and_preprocess_images, adapter_checkpoint=adapter_checkpoint
         )
 
         if device.type == "cuda":
