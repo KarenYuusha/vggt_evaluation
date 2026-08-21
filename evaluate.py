@@ -14,11 +14,15 @@ def parse_args(argv=None):
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--model", default="facebook/VGGT-1B", help="Hugging Face model id or local checkpoint")
     parser.add_argument("--backbone", choices=["dinov2", "dinov3"], default="dinov2")
+    parser.add_argument("--adapter-checkpoint", type=Path, default=None)
     parser.add_argument("--num-frames", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-scenes", type=int, default=None)
     parser.add_argument("--output", type=Path, default=None)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.adapter_checkpoint is not None and args.backbone != "dinov3":
+        parser.error("--adapter-checkpoint requires --backbone dinov3")
+    return args
 
 
 def main():
@@ -36,11 +40,14 @@ def main():
     if not scenes:
         raise RuntimeError(f"No valid scenes found in {args.data_dir}")
 
-    runner = VGGTModelRunner.from_pretrained(args.model, backbone=args.backbone)
+    runner = VGGTModelRunner.from_pretrained(
+        args.model, backbone=args.backbone, adapter_checkpoint=args.adapter_checkpoint
+    )
     result = evaluate_scenes(runner, scenes, dataset_name=dataset_name)
     result.update({
         "model": args.model,
         "backbone": runner.backbone,
+        "adapter_checkpoint": str(args.adapter_checkpoint) if args.adapter_checkpoint is not None else None,
         "input_target_size": runner.input_target_size,
         "patch_size": runner.patch_size,
         "num_frames": args.num_frames,
@@ -53,6 +60,8 @@ def main():
 
     print(f"Dataset: {result['dataset']}")
     print(f"Backbone: {result['backbone']} ({result['input_target_size']}px, patch {result['patch_size']})")
+    if result["adapter_checkpoint"]:
+        print(f"Adapter: {result['adapter_checkpoint']}")
     print(f"Scenes: {result['num_scenes']}")
     print(f"AUC@30: {result['auc30']:.4f} ({result['auc30'] * 100:.2f}%)")
     print(f"Average inference: {result['avg_inference_ms']:.2f} ms")
