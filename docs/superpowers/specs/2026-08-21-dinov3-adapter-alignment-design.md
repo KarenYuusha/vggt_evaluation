@@ -8,7 +8,9 @@ This is a proof-of-concept using a local `RealEstate10k_finetune/` dataset conta
 
 ## Data split
 
-The 100 finetuning clips are sorted by clip directory name, shuffled with a deterministic seed, and split at the clip level:
+The extractor first compares clip directory names in `RealEstate10k_finetune/` against the existing RealEstate10K evaluation directory. If any clip identifier appears in both sets, extraction fails and reports the overlapping clip IDs. This leakage check is enabled by default when `dataset/RealEstate10k/` exists and can also be pointed at another evaluation directory explicitly.
+
+The 100 finetuning clips are then sorted by clip directory name, shuffled with a deterministic seed, and split at the clip level:
 
 - 90 clips for training.
 - 10 clips for validation.
@@ -19,7 +21,7 @@ The final camera-pose evaluation continues to use the separate existing RealEsta
 
 ## Phase 1: Offline feature extraction
 
-A feature-extraction script accepts `--data-dir RealEstate10k_finetune` and an output directory. It validates that each selected clip contains an `images/` directory with 20 readable frames.
+A feature-extraction script accepts `--data-dir RealEstate10k_finetune`, an output directory, and an optional evaluation/exclusion directory used for leakage checking. It validates that each selected clip contains an `images/` directory with exactly 20 readable frames. Frames are ordered deterministically by filename.
 
 For every image, two frozen feature tensors are produced from the same source frame:
 
@@ -48,7 +50,7 @@ Features are converted to FP16 before being written to disk. Each clip is stored
 
 If a clip cannot be stacked because source images unexpectedly produce different patch counts within that clip, extraction fails with a clear error rather than silently padding or truncating features.
 
-The output directory also contains a JSON manifest recording the deterministic split, seed, source clip names, number of images, feature shapes, model identifiers, and preprocessing sizes. Cached feature tensors and trained checkpoints are generated artifacts and are not committed to Git.
+The output directory also contains a JSON manifest recording the deterministic split, seed, source clip names, excluded/evaluation clip names, number of images, feature shapes, model identifiers, and preprocessing sizes. Cached feature tensors and trained checkpoints are generated artifacts and are not committed to Git.
 
 ## Phase 2: Adapter training
 
@@ -64,7 +66,7 @@ No backbone or VGGT parameter participates in this phase; DINOv2 and DINOv3 do n
 
 For each training clip, `[20, P, 1024]` features are flattened into patch pairs `[20 * P, 1024]`. Patch pairs are shuffled and optimized in mini-batches so memory use stays low.
 
-The training objective combines feature-value reconstruction and directional alignment:
+The training objective combines feature-value reconstruction and directional alignment with equal weights:
 
 ```text
 loss = mse_loss + cosine_loss
@@ -80,7 +82,7 @@ Initial training defaults:
 - patch batch size: `4096`.
 - deterministic seed: `0`.
 
-Validation runs after every epoch over all validation clip feature pairs without updating weights. The checkpoint with the lowest mean validation loss is saved as `best_adapter.pt`; the final epoch checkpoint may also be saved separately for diagnostics.
+Validation runs after every epoch over all validation clip feature pairs without updating weights. The checkpoint with the lowest mean validation loss is saved as `best_adapter.pt`. A final-epoch checkpoint is saved separately for diagnostics.
 
 Each checkpoint stores the adapter state dict plus metadata including input/output dimension, model identifiers, training seed, epoch, train loss, validation loss, and loss weights.
 
@@ -113,7 +115,7 @@ Expected new modules/scripts:
 - `adapter/__init__.py`
 - `adapter/model.py` — adapter definition, identity initialization, checkpoint loading.
 - `adapter/features.py` — DINOv2/DINOv3 patch feature extraction helpers and cache validation.
-- `extract_adapter_features.py` — deterministic 90/10 clip split and offline cache generation.
+- `extract_adapter_features.py` — leakage check, deterministic 90/10 clip split, and offline cache generation.
 - `train_adapter.py` — cached-feature training and validation loop.
 - adapter-specific tests under `tests/`.
 
@@ -130,6 +132,7 @@ Expected existing files to change:
 Tests must cover:
 
 - deterministic clip-level 90/10 split with no overlap.
+- overlap between finetuning and evaluation clip IDs is rejected.
 - exact DINOv2/DINOv3 patch-shape validation.
 - identity adapter initialization.
 - only adapter parameters are trainable in the training module.
@@ -143,7 +146,7 @@ Tests must cover:
 
 The implementation is complete when:
 
-1. Feature extraction can process the local 100-clip/20-frame dataset without loading any evaluation clips.
+1. Feature extraction can process the local 100-clip/20-frame dataset and rejects any clip that overlaps the evaluation set.
 2. The generated manifest contains exactly 90 training clips and 10 validation clips with no overlap.
 3. Every cached DINOv2/DINOv3 pair has matching `[20, P, 1024]` shapes.
 4. Adapter training can run using only cached features and produces a best-validation checkpoint.
