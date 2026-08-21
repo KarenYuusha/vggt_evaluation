@@ -4,48 +4,55 @@ Evaluate feed-forward VGGT camera pose estimation on the included CO3Dv2 subset 
 
 ## Setup
 
-Install the project dependencies in the same Python environment. The evaluator loads `facebook/VGGT-1B` by default; you can also pass a local VGGT checkpoint with `--model`.
-
-For DINOv3, clone the official repository once:
+Install the project dependencies:
 
 ```powershell
-git clone https://github.com/facebookresearch/dinov3.git
+uv pip install -r requirements.txt
 ```
 
-Use the ViT-L/16 weight URL from the Meta acceptance email directly with `--dinov3-weights`, or download that checkpoint locally and pass its path. Do not commit the private weight URL to this repository.
+The evaluator loads `facebook/VGGT-1B` by default; you can also pass a local VGGT checkpoint with `--model`.
+
+For DINOv3, access is provided through the gated Hugging Face repository `facebook/dinov3-vitl16-pretrain-lvd1689m`. Log in once using the same Hugging Face account that was approved:
+
+```powershell
+uv run hf auth login
+uv run hf auth whoami
+```
+
+`transformers>=4.56.0` is required for the `dinov3_vit` architecture. Hugging Face downloads and caches the checkpoint automatically on the first DINOv3 run.
 
 ## DINOv2 baseline
 
 CO3Dv2:
 
 ```powershell
-uv run python evaluate.py --dataset co3d --data-dir dataset\CO3DV2 --num-frames 10 --seed 0 --backbone dinov2
+uv run python evaluate.py --dataset co3d --data-dir dataset\CO3DV2 --num-frames 10 --seed 0 --backbone dinov2 --output results\vggt_dinov2_co3d.json
 ```
 
 RealEstate10K:
 
 ```powershell
-uv run python evaluate.py --dataset realestate10k --data-dir dataset\RealEstate10k --num-frames 10 --backbone dinov2
+uv run python evaluate.py --dataset realestate10k --data-dir dataset\RealEstate10k --num-frames 10 --backbone dinov2 --output results\vggt_dinov2_realestate10k.json
 ```
 
 The DINOv2 path preserves the original VGGT preprocessing: target size 518 and patch size 14.
 
 ## Zero-shot DINOv3 ViT-L/16
 
-The DINOv3 path first loads the pretrained VGGT checkpoint and then replaces only `model.aggregator.patch_embed` with the official pretrained DINOv3 ViT-L/16 backbone. It uses final-layer normalized patch tokens (`x_norm_patchtokens`) with no learned adapter, no training, and no fine-tuning.
+The DINOv3 path loads `facebook/dinov3-vitl16-pretrain-lvd1689m` with Hugging Face Transformers and replaces only `model.aggregator.patch_embed`. It removes the DINOv3 CLS and register tokens, then passes only final-layer 1024-dimensional patch tokens into the pretrained VGGT frame/global transformer. There is no learned adapter, training, or fine-tuning.
 
-DINOv3 uses target size 592 and patch size 16. This preserves the patch-grid scale used by VGGT because `518 / 14 = 592 / 16 = 37`.
+DINOv3 uses target size 592 and patch size 16. This preserves VGGT's 37x37 patch grid because `518 / 14 = 592 / 16 = 37`.
 
 CO3Dv2:
 
 ```powershell
-uv run python evaluate.py --dataset co3d --data-dir dataset\CO3DV2 --num-frames 10 --seed 0 --backbone dinov3 --dinov3-repo .\dinov3 --dinov3-weights "<URL_OR_LOCAL_PATH_FROM_META_EMAIL>"
+uv run python evaluate.py --dataset co3d --data-dir dataset\CO3DV2 --num-frames 10 --seed 0 --backbone dinov3 --output results\vggt_dinov3_co3d.json
 ```
 
 RealEstate10K:
 
 ```powershell
-uv run python evaluate.py --dataset realestate10k --data-dir dataset\RealEstate10k --num-frames 10 --backbone dinov3 --dinov3-repo .\dinov3 --dinov3-weights "<URL_OR_LOCAL_PATH_FROM_META_EMAIL>"
+uv run python evaluate.py --dataset realestate10k --data-dir dataset\RealEstate10k --num-frames 10 --backbone dinov3 --output results\vggt_dinov3_realestate10k.json
 ```
 
 This is a **zero-shot backbone substitution experiment**. The DINOv3 paper's reported VGGT results used a trained modified VGGT pipeline, so these results should not be described as reproducing the paper's DINOv3-VGGT numbers.
@@ -58,7 +65,7 @@ Raw CO3D PyTorch3D poses are converted to OpenCV world-to-camera poses using the
 
 ## RealEstate10K
 
-Each scene must contain `images/` and `selected_frames.txt`. The evaluator uses the exact timestamped frames already selected in each scene and reads the final 12 numbers of each metadata row as the 3x4 world-to-camera pose.
+Each RealEstate10K scene must contain `images/` and `selected_frames.txt`. The evaluator uses the exact timestamped frames already selected in each scene and reads the final 12 numbers of each metadata row as the 3x4 world-to-camera pose.
 
 ## Timing
 
