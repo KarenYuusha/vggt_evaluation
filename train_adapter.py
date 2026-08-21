@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from adapter.model import build_identity_adapter
+from adapter.model import build_identity_adapter, build_residual_mlp_adapter
 from adapter.training import fit_adapter
 
 
@@ -19,6 +19,8 @@ def parse_args(argv=None):
     parser.add_argument("--mse-weight", type=float, default=1.0)
     parser.add_argument("--cosine-weight", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--adapter-type", choices=["linear", "mlp"], default="linear")
+    parser.add_argument("--hidden-dim", type=int, default=2048)
     parser.add_argument("--device", default=None)
     return parser.parse_args(argv)
 
@@ -38,12 +40,18 @@ def main(argv=None):
         )
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    adapter = build_identity_adapter(dim=int(manifest.get("feature_dim", 1024)))
+    feature_dim = int(manifest.get("feature_dim", 1024))
+    if args.adapter_type == "linear":
+        adapter = build_identity_adapter(dim=feature_dim)
+    else:
+        adapter = build_residual_mlp_adapter(dim=feature_dim, hidden_dim=args.hidden_dim)
     metadata = {
         "cache_manifest": str(manifest_path),
         "vggt_model": manifest.get("vggt_model"),
         "dinov3_model": manifest.get("dinov3_model"),
         "split_seed": manifest.get("seed"),
+        "adapter_type": args.adapter_type,
+        "hidden_dim": args.hidden_dim if args.adapter_type == "mlp" else None,
     }
     history = fit_adapter(
         adapter, train_files, val_files, args.output_dir, device=device, epochs=args.epochs,
