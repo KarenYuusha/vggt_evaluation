@@ -52,7 +52,8 @@ def test_save_cache_record_uses_fp16_and_manifest_records_split(tmp_path):
     assert record["dino2"].device.type == "cpu"
     assert record["images"] == images
 
-    manifest = build_manifest(["a", "b"], ["c"], seed=7)
+    manifest = build_manifest(["a", "b"], ["c"], seed=7, frames_per_clip=3)
     assert manifest["train_clips"] == ["a", "b"]
     assert manifest["val_clips"] == ["c"]
     assert manifest["seed"] == 7
+    assert manifest["num_images"] == 9
