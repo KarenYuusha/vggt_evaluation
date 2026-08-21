@@ -1,25 +1,15 @@
 # VGGT Evaluation
 
-Evaluate feed-forward VGGT camera pose estimation on the included CO3Dv2 subset and RealEstate10K subset using AUC@30 and runtime. The evaluator supports the original DINOv2 backbone, a zero-shot DINOv3 ViT-L/16 substitution, and optional trained DINOv3-to-DINOv2 feature adapters.
+Evaluate VGGT camera pose estimation on the included CO3Dv2 and RealEstate10K subsets using AUC@30 and runtime.
 
 ## Setup
 
-Install the project dependencies:
-
 ```powershell
 uv pip install -r requirements.txt
-```
-
-The evaluator loads `facebook/VGGT-1B` by default; you can also pass a local VGGT checkpoint with `--model`.
-
-For DINOv3, access is provided through the gated Hugging Face repository `facebook/dinov3-vitl16-pretrain-lvd1689m`. Log in once using the same Hugging Face account that was approved:
-
-```powershell
 uv run hf auth login
-uv run hf auth whoami
 ```
 
-`transformers>=4.56.0` is required for the `dinov3_vit` architecture. Hugging Face downloads and caches the checkpoint automatically on the first DINOv3 run.
+The default VGGT checkpoint is `facebook/VGGT-1B`. DINOv3 uses the gated Hugging Face checkpoint `facebook/dinov3-vitl16-pretrain-lvd1689m`.
 
 ## DINOv2 baseline
 
@@ -35,159 +25,83 @@ RealEstate10K:
 uv run python evaluate.py --dataset realestate10k --data-dir dataset\RealEstate10k --num-frames 10 --backbone dinov2 --output results\vggt_dinov2_realestate10k.json
 ```
 
-The DINOv2 path preserves the original VGGT preprocessing: target size 518 and patch size 14.
+The original VGGT path uses DINOv2 ViT-L/14 at target size 518.
 
-## Zero-shot DINOv3 ViT-L/16
+## DINOv3 paper configuration
 
-The DINOv3 path loads `facebook/dinov3-vitl16-pretrain-lvd1689m` with Hugging Face Transformers and replaces only `model.aggregator.patch_embed`. It removes the DINOv3 CLS and register tokens, then passes only final-layer 1024-dimensional patch tokens into the pretrained VGGT frame/global transformer. There is no learned adapter, training, or fine-tuning in this mode.
+The DINOv3 paper's VGGT experiment changes the image backbone to DINOv3 ViT-L/16, uses target size 592, and uses the concatenation of four intermediate ViT-L layers rather than only the final layer. The official DINOv3 implementation uses ViT-L block indices `[4, 11, 17, 23]` for this four-level representation.
 
-DINOv3 uses target size 592 and patch size 16. This preserves VGGT's patch-grid scale because `518 / 14 = 592 / 16 = 37`.
+`paper4` mode implements the published feature extraction exactly:
+
+```text
+image @ 592px
+ -> frozen DINOv3 ViT-L/16
+ -> blocks [4, 11, 17, 23]
+ -> apply DINOv3 final LayerNorm to each block
+ -> remove CLS + register tokens
+ -> concatenate channels
+ -> [B, P, 4096]
+```
+
+The DINOv3 paper also runs the VGGT training pipeline and fine-tunes the image backbone. The public frozen `facebook/VGGT-1B` checkpoint expects 1024-D patch tokens, while `paper4` produces 4096-D tokens. The paper/released DINOv3 repository does not publish the trained 4096-to-1024 VGGT interface or its weights. Therefore, this repository intentionally does **not** invent a projection and label it as the paper implementation.
+
+`--backbone dinov3` now defaults to `--dinov3-feature-mode paper4`. Attempting to run `paper4` directly through the frozen public VGGT produces a clear error explaining this missing interface instead of silently falling back to the final DINOv3 layer.
+
+## Legacy frozen DINOv3 final-layer experiment
+
+The previous zero-shot experiment used only the final normalized DINOv3 patch features. It remains available explicitly for reproducibility, but it is **not** the main DINOv3 paper configuration.
 
 CO3Dv2:
 
 ```powershell
-uv run python evaluate.py --dataset co3d --data-dir dataset\CO3DV2 --num-frames 10 --seed 0 --backbone dinov3 --output results\vggt_dinov3_co3d.json
+uv run python evaluate.py --dataset co3d --data-dir dataset\CO3DV2 --num-frames 10 --seed 0 --backbone dinov3 --dinov3-feature-mode last --output results\vggt_dinov3_last_co3d.json
 ```
 
 RealEstate10K:
 
 ```powershell
-uv run python evaluate.py --dataset realestate10k --data-dir dataset\RealEstate10k --num-frames 10 --backbone dinov3 --output results\vggt_dinov3_realestate10k.json
+uv run python evaluate.py --dataset realestate10k --data-dir dataset\RealEstate10k --num-frames 10 --backbone dinov3 --dinov3-feature-mode last --output results\vggt_dinov3_last_realestate10k.json
 ```
 
-This is a **zero-shot backbone substitution experiment**. The DINOv3 paper's reported VGGT results used a trained modified VGGT pipeline, so these results should not be described as reproducing the paper's DINOv3-VGGT numbers.
+This path uses 592px input, patch size 16, removes CLS/register tokens, and returns `[B, P, 1024]` final-layer features to the frozen VGGT transformer.
 
-## DINOv3 feature-alignment adapters
+## Feature-alignment adapter experiments
 
-The adapter experiments keep DINOv2, DINOv3, VGGT, and CameraHead frozen. Only the feature adapter is trainable. Two adapter types are supported:
+The linear and residual-MLP adapters developed in this repository are separate custom experiments. They operate on the legacy 1024-D final-layer DINOv3 representation, not on the paper's 4096-D four-layer representation.
 
-```text
-linear:  Linear(1024, 1024)
-mlp:     x + Linear(2048, 1024)(GELU(Linear(1024, 2048)(x)))
-```
-
-The residual MLP initializes its second linear layer to zero, so it also starts as an exact identity mapping. Both adapter types use the same cached DINOv3 input features and DINOv2 target features.
-
-The proof-of-concept dataset is expected at:
-
-```text
-RealEstate10k_finetune/
-├── clip_001/
-│   └── images/        # 20 frames
-├── clip_002/
-│   └── images/        # 20 frames
-└── ...                # exactly 100 clips
-```
-
-The script deterministically splits these 100 clips into 90 training clips and 10 validation clips. It also compares clip directory names against `dataset\RealEstate10k` and aborts if any finetuning clip overlaps with the final evaluation set.
-
-### 1. Cache frozen DINOv2 and DINOv3 features
+Cache features:
 
 ```powershell
 uv run python extract_adapter_features.py --data-dir RealEstate10k_finetune --evaluation-dir dataset\RealEstate10k --output-dir adapter_data --seed 0 --image-batch-size 2
 ```
 
-For each source frame, the extractor saves:
-
-```text
-VGGT DINOv2 ViT-L/14 @ 518px -> target patch features
-DINOv3 ViT-L/16      @ 592px -> input patch features
-```
-
-Both paths use the same ImageNet normalization and produce matching `[P, 1024]` patch features. The cache is stored as FP16 on CPU/disk. `--image-batch-size 2` is the conservative default for modest-VRAM GPUs; reduce it to `1` if feature extraction runs out of VRAM.
-
-Expected output:
-
-```text
-adapter_data/
-├── manifest.json
-├── train/             # 90 .pt clip caches
-└── val/               # 10 .pt clip caches
-```
-
-No model is trained during this step. The same cache can be reused for both linear and MLP adapters.
-
-### 2. Train the linear baseline
+Train the linear adapter:
 
 ```powershell
 uv run python train_adapter.py --cache-dir adapter_data --output-dir adapter_checkpoints --adapter-type linear --epochs 20 --batch-size 4096 --lr 1e-3 --weight-decay 1e-4 --seed 0
 ```
 
-### 3. Train the residual MLP adapter
-
-Use a separate output directory so the existing linear checkpoint is preserved:
+Train the residual MLP adapter:
 
 ```powershell
 uv run python train_adapter.py --cache-dir adapter_data --output-dir adapter_checkpoints_mlp --adapter-type mlp --hidden-dim 2048 --epochs 20 --batch-size 4096 --lr 1e-3 --weight-decay 1e-4 --seed 0
 ```
 
-Training reads only the cached tensors. DINOv2, DINOv3, and VGGT are not loaded. Both adapters use the same loss:
-
-```text
-MSE(predicted_dino2, target_dino2)
-+ mean(1 - cosine_similarity(predicted_dino2, target_dino2))
-```
-
-The checkpoint with the lowest validation loss is saved as `best_adapter.pt`, and the final epoch is saved as `last_adapter.pt`. Checkpoints store their adapter architecture, so evaluation loads linear and MLP adapters automatically.
-
-### 4. Evaluate the residual MLP adapter
-
-RealEstate10K:
+Evaluate an adapter by explicitly selecting the legacy final-layer representation:
 
 ```powershell
-uv run python evaluate.py --dataset realestate10k --data-dir dataset\RealEstate10k --num-frames 10 --backbone dinov3 --adapter-checkpoint adapter_checkpoints_mlp\best_adapter.pt --output results\vggt_dinov3_mlp_adapter_realestate10k.json
+uv run python evaluate.py --dataset co3d --data-dir dataset\CO3DV2 --num-frames 10 --seed 0 --backbone dinov3 --dinov3-feature-mode last --adapter-checkpoint adapter_checkpoints\best_adapter.pt --output results\vggt_dinov3_linear_adapter_co3d.json
 ```
 
-CO3Dv2:
+## Evaluation notes
 
-```powershell
-uv run python evaluate.py --dataset co3d --data-dir dataset\CO3DV2 --num-frames 10 --seed 0 --backbone dinov3 --adapter-checkpoint adapter_checkpoints_mlp\best_adapter.pt --output results\vggt_dinov3_mlp_adapter_co3d.json
-```
+CO3Dv2 poses are converted to OpenCV world-to-camera convention before relative-pose evaluation. Each 10-frame scene produces 45 camera pairs. The reported dataset score is AUC@30. Model loading and warm-up are excluded from inference timing.
 
-The final inference path is:
+When reporting results, distinguish the following configurations explicitly:
 
 ```text
-image
- -> frozen DINOv3 ViT-L/16
- -> trained linear or residual MLP adapter
- -> frozen pretrained VGGT frame/global transformer
- -> frozen CameraHead
- -> camera pose
+DINOv2 VGGT baseline
+DINOv3 paper4 feature extraction (paper configuration; downstream bridge/training unavailable for frozen public VGGT)
+DINOv3 final-layer frozen swap (legacy zero-shot experiment)
+DINOv3 final-layer + custom feature adapter (our custom experiment)
 ```
-
-The intended comparison is therefore:
-
-```text
-1. Original VGGT + DINOv2
-2. Frozen VGGT + direct DINOv3 substitution
-3. Frozen VGGT + DINOv3 + linear adapter
-4. Frozen VGGT + DINOv3 + residual MLP adapter
-```
-
-Only the adapters in experiments 3 and 4 are trained.
-
-## CO3Dv2 subset
-
-The loader prefers `set_lists_fewview_dev.json` when it is available. For the official CO3D single-sequence subset, where that file is absent, it falls back to available `set_lists_manyview_dev_*.json` files. Sequences must have a finite `viewpoint_quality_score > 0.5`, camera poses must be finite, and 10 frames are sampled deterministically from the selected dev sequence using the requested seed.
-
-Raw CO3D PyTorch3D poses are converted to OpenCV world-to-camera poses using the same conversion as the public VGGT evaluator. The dataset-level score is the mean AUC@30 across available categories. Scores from the single-sequence subset are custom subset results, not the official full CO3Dv2 benchmark.
-
-## RealEstate10K
-
-Each RealEstate10K evaluation scene must contain `images/` and `selected_frames.txt`. The evaluator uses the exact timestamped frames already selected in each scene and reads the final 12 numbers of each metadata row as the 3x4 world-to-camera pose.
-
-## Timing
-
-Model loading and the warm-up pass are excluded from timing. The reported `inference_ms` covers:
-
-```text
-selected image backbone -> optional adapter -> VGGT frame/global aggregator -> camera head -> pose decoding
-```
-
-Image loading/preprocessing is reported separately. CUDA timing uses synchronized CUDA events; CPU timing uses `time.perf_counter()`.
-
-## Outputs
-
-Results are written to `results/vggt_<dataset>.json` unless `--output` is supplied. Each JSON file records `backbone`, `adapter_checkpoint`, `input_target_size`, and `patch_size` in addition to dataset AUC@30, average/std inference time, preprocessing time, total scene time, and per-scene metrics. CO3D output also includes per-category AUC@30.
-
-Use `--max-scenes N` for a quick smoke test. When comparing DINOv2, direct DINOv3, linear-adapter DINOv3, and MLP-adapter DINOv3, use the same dataset, seed, frame count, and output metric settings.
