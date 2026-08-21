@@ -14,6 +14,7 @@ def parse_args(argv=None):
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--model", default="facebook/VGGT-1B", help="Hugging Face model id or local checkpoint")
     parser.add_argument("--backbone", choices=["dinov2", "dinov3"], default="dinov2")
+    parser.add_argument("--dinov3-feature-mode", choices=["paper4", "last"], default="paper4")
     parser.add_argument("--adapter-checkpoint", type=Path, default=None)
     parser.add_argument("--num-frames", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
@@ -22,6 +23,8 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.adapter_checkpoint is not None and args.backbone != "dinov3":
         parser.error("--adapter-checkpoint requires --backbone dinov3")
+    if args.adapter_checkpoint is not None and args.dinov3_feature_mode != "last":
+        parser.error("Existing adapter checkpoints require --dinov3-feature-mode last")
     return args
 
 
@@ -41,12 +44,14 @@ def main():
         raise RuntimeError(f"No valid scenes found in {args.data_dir}")
 
     runner = VGGTModelRunner.from_pretrained(
-        args.model, backbone=args.backbone, adapter_checkpoint=args.adapter_checkpoint
+        args.model, backbone=args.backbone, adapter_checkpoint=args.adapter_checkpoint,
+        dinov3_feature_mode=args.dinov3_feature_mode,
     )
     result = evaluate_scenes(runner, scenes, dataset_name=dataset_name)
     result.update({
         "model": args.model,
         "backbone": runner.backbone,
+        "dinov3_feature_mode": runner.dinov3_feature_mode,
         "adapter_checkpoint": str(args.adapter_checkpoint) if args.adapter_checkpoint is not None else None,
         "input_target_size": runner.input_target_size,
         "patch_size": runner.patch_size,
@@ -60,6 +65,8 @@ def main():
 
     print(f"Dataset: {result['dataset']}")
     print(f"Backbone: {result['backbone']} ({result['input_target_size']}px, patch {result['patch_size']})")
+    if result["dinov3_feature_mode"]:
+        print(f"DINOv3 features: {result['dinov3_feature_mode']}")
     if result["adapter_checkpoint"]:
         print(f"Adapter: {result['adapter_checkpoint']}")
     print(f"Scenes: {result['num_scenes']}")
