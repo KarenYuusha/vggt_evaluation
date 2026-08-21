@@ -17,7 +17,7 @@ class Prediction:
     inference_ms: float
 
 
-def configure_backbone(model, backbone, preprocess_fn, adapter_checkpoint=None,
+def configure_backbone(model, backbone, preprocess_fn, adapter_checkpoint=None, dinov3_feature_mode="last",
                        dinov3_loader=load_dinov3_vitl16, adapter_loader=load_adapter_checkpoint):
     if backbone == "dinov2":
         if adapter_checkpoint is not None:
@@ -25,6 +25,15 @@ def configure_backbone(model, backbone, preprocess_fn, adapter_checkpoint=None,
         return preprocess_fn, 518, 14
     if backbone != "dinov3":
         raise ValueError(f"Unsupported backbone: {backbone}")
+    if dinov3_feature_mode == "paper4":
+        raise ValueError(
+            "DINOv3 paper4 concatenates four 1024-D intermediate layers into 4096-D patch features, "
+            "but the public frozen VGGT-1B expects 1024-D patch tokens. The DINOv3 paper does not "
+            "publish the trained 4096->1024 interface/weights, so exact paper4 features cannot be "
+            "fed into the frozen public VGGT without introducing a new non-paper bridge."
+        )
+    if dinov3_feature_mode != "last":
+        raise ValueError(f"Unsupported DINOv3 feature mode: {dinov3_feature_mode}")
 
     dinov3 = dinov3_loader()
     adapter = None
@@ -35,7 +44,7 @@ def configure_backbone(model, backbone, preprocess_fn, adapter_checkpoint=None,
         adapter.eval()
         adapter.requires_grad_(False)
 
-    model.aggregator.patch_embed = DINOv3PatchEmbed(dinov3, adapter=adapter)
+    model.aggregator.patch_embed = DINOv3PatchEmbed(dinov3, adapter=adapter, feature_mode=dinov3_feature_mode)
     model.aggregator.patch_size = 16
     preprocess = partial(preprocess_fn, target_size=592, patch_size=16)
     return preprocess, 592, 16
@@ -43,7 +52,7 @@ def configure_backbone(model, backbone, preprocess_fn, adapter_checkpoint=None,
 
 class VGGTModelRunner:
     def __init__(self, model, device, dtype, preprocess_fn, pose_decode_fn, backbone="dinov2",
-                 input_target_size=518, patch_size=14):
+                 input_target_size=518, patch_size=14, dinov3_feature_mode=None):
         self.device = torch.device(device)
         self.dtype = dtype
         self.model = model.eval().to(self.device)
@@ -54,10 +63,11 @@ class VGGTModelRunner:
         self.backbone = backbone
         self.input_target_size = input_target_size
         self.patch_size = patch_size
+        self.dinov3_feature_mode = dinov3_feature_mode
 
     @classmethod
     def from_pretrained(cls, model_source="facebook/VGGT-1B", device=None, backbone="dinov2",
-                        adapter_checkpoint=None):
+                        adapter_checkpoint=None, dinov3_feature_mode="last"):
         from vggt.models.vggt import VGGT
         from vggt.utils.load_fn import load_and_preprocess_images
         from vggt.utils.pose_enc import pose_encoding_to_extri_intri
@@ -74,7 +84,8 @@ class VGGTModelRunner:
             model = VGGT.from_pretrained(model_source)
 
         preprocess_fn, input_target_size, patch_size = configure_backbone(
-            model, backbone, load_and_preprocess_images, adapter_checkpoint=adapter_checkpoint
+            model, backbone, load_and_preprocess_images, adapter_checkpoint=adapter_checkpoint,
+            dinov3_feature_mode=dinov3_feature_mode,
         )
 
         if device.type == "cuda":
@@ -86,6 +97,7 @@ class VGGTModelRunner:
         return cls(
             model, device, dtype, preprocess_fn, pose_encoding_to_extri_intri, backbone=backbone,
             input_target_size=input_target_size, patch_size=patch_size,
+            dinov3_feature_mode=dinov3_feature_mode if backbone == "dinov3" else None,
         )
 
     def _camera_forward(self, images):
