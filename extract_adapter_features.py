@@ -51,7 +51,8 @@ def save_clip_cache(path, clip, images, dino2, dino3):
     torch.save(record, path)
 
 
-def build_manifest(train_clips, val_clips, seed=0, model_id=VGGT_MODEL_ID, dinov3_model_id=DINOV3_MODEL_ID):
+def build_manifest(train_clips, val_clips, seed=0, model_id=VGGT_MODEL_ID,
+                   dinov3_model_id=DINOV3_MODEL_ID, frames_per_clip=20):
     train_names = [Path(clip).name for clip in train_clips]
     val_names = [Path(clip).name for clip in val_clips]
     return {
@@ -60,7 +61,7 @@ def build_manifest(train_clips, val_clips, seed=0, model_id=VGGT_MODEL_ID, dinov
         "val_clips": val_names,
         "num_train_clips": len(train_names),
         "num_val_clips": len(val_names),
-        "num_images": 20 * (len(train_names) + len(val_names)),
+        "num_images": frames_per_clip * (len(train_names) + len(val_names)),
         "vggt_model": model_id,
         "dinov3_model": dinov3_model_id,
         "dino2_target_size": 518,
@@ -140,7 +141,9 @@ def main(argv=None):
     teacher, dinov3 = load_feature_models(args.model, device, dtype)
     from vggt.utils.load_fn import load_and_preprocess_images
 
-    manifest = build_manifest(train_clips, val_clips, seed=args.seed, model_id=args.model)
+    manifest = build_manifest(
+        train_clips, val_clips, seed=args.seed, model_id=args.model, frames_per_clip=args.frames_per_clip
+    )
     manifest["frames_per_clip"] = args.frames_per_clip
     manifest["image_batch_size"] = args.image_batch_size
     manifest["device"] = str(device)
