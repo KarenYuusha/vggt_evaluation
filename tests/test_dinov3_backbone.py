@@ -20,6 +20,30 @@ class FakeHFDINOv3(torch.nn.Module):
         return SimpleNamespace(last_hidden_state=torch.cat([special, patches], dim=1))
 
 
+class FakePaperHFDINOv3(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.ones(1))
+        self.config = SimpleNamespace(num_register_tokens=4)
+        self.norm = AddConstantNorm(100.0)
+        self.output_hidden_states_calls = []
+
+    def forward(self, pixel_values, output_hidden_states=False):
+        self.output_hidden_states_calls.append(output_hidden_states)
+        batch = pixel_values.shape[0]
+        hidden_states = tuple(torch.full((batch, 11, 1024), float(i)) for i in range(25))
+        return SimpleNamespace(last_hidden_state=hidden_states[-1], hidden_states=hidden_states)
+
+
+class AddConstantNorm(torch.nn.Module):
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+
+    def forward(self, features):
+        return features + self.value
+
+
 class ScaleAdapter(torch.nn.Module):
     def forward(self, features):
         return features * 2
@@ -32,6 +56,19 @@ def test_adapter_strips_cls_and_register_tokens_and_freezes_weights():
     assert output.shape == (2, 6, 1024)
     assert torch.all(output == 1)
     assert all(not parameter.requires_grad for parameter in wrapper.parameters())
+
+
+def test_paper4_concatenates_normalized_layers_4_11_17_23():
+    backbone = FakePaperHFDINOv3()
+    wrapper = DINOv3PatchEmbed(backbone, feature_mode="paper4")
+    output = wrapper(torch.zeros(2, 3, 32, 48))
+
+    assert output.shape == (2, 6, 4096)
+    assert backbone.output_hidden_states_calls == [True]
+    expected_values = [105.0, 112.0, 118.0, 124.0]
+    for index, expected in enumerate(expected_values):
+        chunk = output[..., index * 1024:(index + 1) * 1024]
+        assert torch.all(chunk == expected)
 
 
 def test_wrapper_applies_and_freezes_feature_adapter():
