@@ -1,6 +1,6 @@
 import torch
 
-from adapter.model import build_identity_adapter, load_adapter_checkpoint
+from adapter.model import build_identity_adapter, build_residual_mlp_adapter, load_adapter_checkpoint
 from adapter.training import alignment_loss, fit_adapter, iter_patch_batches, train_epoch
 
 
@@ -54,6 +54,29 @@ def test_training_decreases_loss_on_small_linear_mapping(tmp_path):
 
     assert after < before * 0.35
     assert all(parameter.grad is not None for parameter in adapter.parameters())
+
+
+def test_residual_mlp_training_decreases_nonlinear_alignment_loss(tmp_path):
+    generator = torch.Generator().manual_seed(5)
+    x = torch.randn(8, 8, 4, generator=generator)
+    y = x + 0.2 * torch.tanh(x @ torch.tensor([
+        [0.8, -0.2, 0.1, 0.0],
+        [0.1, 0.7, -0.2, 0.1],
+        [0.0, 0.2, 0.9, -0.1],
+        [-0.1, 0.0, 0.2, 0.8],
+    ]).T)
+    cache = tmp_path / "train" / "mlp.pt"
+    write_cache(cache, x, y)
+
+    adapter = build_residual_mlp_adapter(dim=4, hidden_dim=8)
+    optimizer = torch.optim.AdamW(adapter.parameters(), lr=0.03, weight_decay=0.0)
+    before = float(alignment_loss(adapter(x.float()), y.float()).detach())
+    for epoch in range(20):
+        train_epoch(adapter, [cache], optimizer, "cpu", batch_size=32, seed=epoch)
+    after = float(alignment_loss(adapter(x.float()), y.float()).detach())
+
+    assert after < before * 0.25
+    assert torch.count_nonzero(adapter.fc2.weight) > 0
 
 
 def test_fit_adapter_saves_best_validation_checkpoint(tmp_path):
