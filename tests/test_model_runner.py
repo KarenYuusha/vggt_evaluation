@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
+from adapter.model import build_identity_adapter
 from evaluation.model_runner import VGGTModelRunner, configure_backbone
 
 
@@ -99,3 +101,23 @@ def test_configure_backbone_loads_huggingface_dinov3_without_repo_or_weights():
     assert model.aggregator.patch_size == 16
     assert fake_preprocess.kwargs == {"target_size": 592, "patch_size": 16}
     assert (target_size, patch_size) == (592, 16)
+
+
+def test_configure_backbone_loads_and_freezes_adapter_for_dinov3():
+    model = FakeModel()
+    adapter = build_identity_adapter()
+    calls = []
+    configure_backbone(
+        model, "dinov3", fake_preprocess, adapter_checkpoint="adapter.pt",
+        dinov3_loader=lambda: FakeDINOv3(),
+        adapter_loader=lambda path: calls.append(path) or (adapter, {"epoch": 1}),
+    )
+
+    assert calls == ["adapter.pt"]
+    assert model.aggregator.patch_embed.adapter is adapter
+    assert all(not parameter.requires_grad for parameter in adapter.parameters())
+
+
+def test_configure_backbone_rejects_adapter_with_dinov2():
+    with pytest.raises(ValueError, match="DINOv3"):
+        configure_backbone(FakeModel(), "dinov2", fake_preprocess, adapter_checkpoint="adapter.pt")
