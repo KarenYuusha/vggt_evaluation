@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import torch
 
+from adapter.model import build_residual_mlp_adapter, load_adapter_checkpoint, save_adapter_checkpoint
 from evaluation.dinov3_backbone import DINOv3PatchEmbed, load_dinov3_vitl16
 
 
@@ -41,6 +42,22 @@ def test_wrapper_applies_and_freezes_feature_adapter():
     assert output.shape == (2, 6, 1024)
     assert torch.all(output == 2)
     assert wrapper.adapter is adapter
+    assert all(not parameter.requires_grad for parameter in wrapper.parameters())
+
+
+def test_wrapper_accepts_loaded_residual_mlp_checkpoint(tmp_path):
+    adapter = build_residual_mlp_adapter(dim=1024, hidden_dim=2048)
+    with torch.no_grad():
+        adapter.fc2.bias.fill_(0.25)
+    checkpoint = tmp_path / "mlp.pt"
+    save_adapter_checkpoint(checkpoint, adapter)
+    loaded, _ = load_adapter_checkpoint(checkpoint)
+
+    wrapper = DINOv3PatchEmbed(FakeHFDINOv3(), adapter=loaded)
+    output = wrapper(torch.zeros(1, 3, 32, 48))
+
+    assert output.shape == (1, 6, 1024)
+    assert torch.allclose(output, torch.full_like(output, 1.25))
     assert all(not parameter.requires_grad for parameter in wrapper.parameters())
 
 
