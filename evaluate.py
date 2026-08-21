@@ -14,17 +14,11 @@ def parse_args(argv=None):
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--model", default="facebook/VGGT-1B", help="Hugging Face model id or local checkpoint")
     parser.add_argument("--backbone", choices=["dinov2", "dinov3"], default="dinov2")
-    parser.add_argument("--dinov3-repo", type=Path, default=None)
-    parser.add_argument("--dinov3-weights", default=None)
     parser.add_argument("--num-frames", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-scenes", type=int, default=None)
     parser.add_argument("--output", type=Path, default=None)
-    args = parser.parse_args(argv)
-
-    if args.backbone == "dinov3" and (args.dinov3_repo is None or not args.dinov3_weights):
-        parser.error("--dinov3-repo and --dinov3-weights are required with --backbone dinov3")
-    return args
+    return parser.parse_args(argv)
 
 
 def main():
@@ -42,10 +36,7 @@ def main():
     if not scenes:
         raise RuntimeError(f"No valid scenes found in {args.data_dir}")
 
-    runner = VGGTModelRunner.from_pretrained(
-        args.model, backbone=args.backbone, dinov3_repo=args.dinov3_repo,
-        dinov3_weights=args.dinov3_weights,
-    )
+    runner = VGGTModelRunner.from_pretrained(args.model, backbone=args.backbone)
     result = evaluate_scenes(runner, scenes, dataset_name=dataset_name)
     result.update({
         "model": args.model,

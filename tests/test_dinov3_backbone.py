@@ -1,42 +1,45 @@
+import sys
+from types import SimpleNamespace
+
 import torch
 
 from evaluation.dinov3_backbone import DINOv3PatchEmbed, load_dinov3_vitl16
 
 
-class FakeDINOv3(torch.nn.Module):
+class FakeHFDINOv3(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.weight = torch.nn.Parameter(torch.ones(1))
+        self.config = SimpleNamespace(num_register_tokens=4)
 
-    def forward_features(self, images):
-        batch = images.shape[0]
-        return {"x_norm_patchtokens": torch.ones(batch, 6, 1024)}
+    def forward(self, pixel_values):
+        batch = pixel_values.shape[0]
+        special = torch.zeros(batch, 5, 1024)
+        patches = torch.ones(batch, 6, 1024)
+        return SimpleNamespace(last_hidden_state=torch.cat([special, patches], dim=1))
 
 
-def test_adapter_returns_final_normalized_patch_tokens_and_freezes_weights():
-    backbone = FakeDINOv3()
-    adapter = DINOv3PatchEmbed(backbone)
+def test_adapter_strips_cls_and_register_tokens_and_freezes_weights():
+    adapter = DINOv3PatchEmbed(FakeHFDINOv3())
     output = adapter(torch.zeros(2, 3, 32, 48))
 
     assert output.shape == (2, 6, 1024)
+    assert torch.all(output == 1)
     assert all(not parameter.requires_grad for parameter in adapter.parameters())
 
 
-def test_loader_uses_official_local_torch_hub_api(monkeypatch, tmp_path):
+def test_loader_uses_huggingface_auto_model(monkeypatch):
     calls = {}
-    expected = FakeDINOv3()
+    expected = FakeHFDINOv3()
 
-    def fake_load(repo_dir, model_name, source, weights):
-        calls.update(repo_dir=repo_dir, model_name=model_name, source=source, weights=weights)
-        return expected
+    class FakeAutoModel:
+        @classmethod
+        def from_pretrained(cls, model_id):
+            calls["model_id"] = model_id
+            return expected
 
-    monkeypatch.setattr(torch.hub, "load", fake_load)
-    loaded = load_dinov3_vitl16(tmp_path, "weights-url")
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoModel=FakeAutoModel))
+    loaded = load_dinov3_vitl16()
 
     assert loaded is expected
-    assert calls == {
-        "repo_dir": str(tmp_path),
-        "model_name": "dinov3_vitl16",
-        "source": "local",
-        "weights": "weights-url",
-    }
+    assert calls == {"model_id": "facebook/dinov3-vitl16-pretrain-lvd1689m"}
