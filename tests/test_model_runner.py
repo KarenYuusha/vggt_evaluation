@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import torch
 
@@ -33,8 +35,12 @@ class FakeModel:
 
 
 class FakeDINOv3(torch.nn.Module):
-    def forward_features(self, images):
-        return {"x_norm_patchtokens": torch.zeros(images.shape[0], 4, 1024)}
+    def __init__(self):
+        super().__init__()
+        self.config = SimpleNamespace(num_register_tokens=4)
+
+    def forward(self, pixel_values):
+        return SimpleNamespace(last_hidden_state=torch.zeros(pixel_values.shape[0], 9, 1024))
 
 
 def fake_preprocess(paths, **kwargs):
@@ -78,15 +84,17 @@ def test_configure_backbone_keeps_dinov2_defaults():
     assert (target_size, patch_size) == (518, 14)
 
 
-def test_configure_backbone_replaces_only_patch_encoder_for_dinov3():
+def test_configure_backbone_loads_huggingface_dinov3_without_repo_or_weights():
     model = FakeModel()
     camera_head = model.camera_head
+    calls = []
     preprocess, target_size, patch_size = configure_backbone(
-        model, "dinov3", fake_preprocess, dinov3_repo="repo", dinov3_weights="weights",
-        dinov3_loader=lambda repo, weights: FakeDINOv3(),
+        model, "dinov3", fake_preprocess,
+        dinov3_loader=lambda: calls.append(True) or FakeDINOv3(),
     )
 
     preprocess(["x.jpg"])
+    assert calls == [True]
     assert model.camera_head is camera_head
     assert model.aggregator.patch_size == 16
     assert fake_preprocess.kwargs == {"target_size": 592, "patch_size": 16}
