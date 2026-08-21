@@ -91,7 +91,7 @@ def test_configure_backbone_loads_huggingface_dinov3_without_repo_or_weights():
     camera_head = model.camera_head
     calls = []
     preprocess, target_size, patch_size = configure_backbone(
-        model, "dinov3", fake_preprocess,
+        model, "dinov3", fake_preprocess, dinov3_feature_mode="last",
         dinov3_loader=lambda: calls.append(True) or FakeDINOv3(),
     )
 
@@ -99,8 +99,17 @@ def test_configure_backbone_loads_huggingface_dinov3_without_repo_or_weights():
     assert calls == [True]
     assert model.camera_head is camera_head
     assert model.aggregator.patch_size == 16
+    assert model.aggregator.patch_embed.feature_mode == "last"
     assert fake_preprocess.kwargs == {"target_size": 592, "patch_size": 16}
     assert (target_size, patch_size) == (592, 16)
+
+
+def test_configure_backbone_rejects_paper4_without_published_bridge():
+    with pytest.raises(ValueError, match="4096"):
+        configure_backbone(
+            FakeModel(), "dinov3", fake_preprocess, dinov3_feature_mode="paper4",
+            dinov3_loader=lambda: FakeDINOv3(),
+        )
 
 
 def test_configure_backbone_loads_and_freezes_adapter_for_dinov3():
@@ -108,7 +117,7 @@ def test_configure_backbone_loads_and_freezes_adapter_for_dinov3():
     adapter = build_identity_adapter()
     calls = []
     configure_backbone(
-        model, "dinov3", fake_preprocess, adapter_checkpoint="adapter.pt",
+        model, "dinov3", fake_preprocess, adapter_checkpoint="adapter.pt", dinov3_feature_mode="last",
         dinov3_loader=lambda: FakeDINOv3(),
         adapter_loader=lambda path: calls.append(path) or (adapter, {"epoch": 1}),
     )
