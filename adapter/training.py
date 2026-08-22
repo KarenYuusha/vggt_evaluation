@@ -24,10 +24,14 @@ def iter_patch_batches(cache_files, batch_size, seed=0, shuffle=True):
     generator = torch.Generator().manual_seed(seed)
     for path in files:
         record = torch.load(path, map_location="cpu")
-        dino3 = record["dino3"].reshape(-1, record["dino3"].shape[-1]).float()
-        dino2 = record["dino2"].reshape(-1, record["dino2"].shape[-1]).float()
-        if dino3.shape != dino2.shape:
-            raise ValueError(f"{path}: cached DINOv2/DINOv3 shapes do not match")
+        raw_dino3 = record["dino3"]
+        raw_dino2 = record["dino2"]
+        if raw_dino3.ndim != 3 or raw_dino2.ndim != 3:
+            raise ValueError(f"{path}: cached DINOv2/DINOv3 tensors must be [frames, patches, dim]")
+        if tuple(raw_dino3.shape[:2]) != tuple(raw_dino2.shape[:2]):
+            raise ValueError(f"{path}: cached DINOv2/DINOv3 frame/patch axes do not match")
+        dino3 = raw_dino3.reshape(-1, raw_dino3.shape[-1]).float()
+        dino2 = raw_dino2.reshape(-1, raw_dino2.shape[-1]).float()
         indices = torch.randperm(len(dino3), generator=generator) if shuffle else torch.arange(len(dino3))
         for start in range(0, len(indices), batch_size):
             batch_indices = indices[start:start + batch_size]

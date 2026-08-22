@@ -7,7 +7,12 @@ import numpy as np
 import torch
 
 from adapter.model import load_adapter_checkpoint
-from .dinov3_backbone import DINOv3PatchEmbed, load_dinov3_vitl16
+from .dinov3_backbone import (
+    DINOV3_HIDDEN_SIZE,
+    DINOV3_MULTILAYER_DIM,
+    DINOv3PatchEmbed,
+    load_dinov3_vitl16,
+)
 
 
 @dataclass
@@ -17,25 +22,43 @@ class Prediction:
     inference_ms: float
 
 
+def _dinov3_feature_mode(backbone):
+    if backbone in ("dinov3", "dinov3-final"):
+        return "final"
+    if backbone == "dinov3-multilayer":
+        return "multilayer"
+    raise ValueError(f"Unsupported backbone: {backbone}")
+
+
 def configure_backbone(model, backbone, preprocess_fn, adapter_checkpoint=None,
                        dinov3_loader=load_dinov3_vitl16, adapter_loader=load_adapter_checkpoint):
     if backbone == "dinov2":
         if adapter_checkpoint is not None:
             raise ValueError("Adapter checkpoints are only valid with the DINOv3 backbone")
         return preprocess_fn, 518, 14
-    if backbone != "dinov3":
-        raise ValueError(f"Unsupported backbone: {backbone}")
+
+    feature_mode = _dinov3_feature_mode(backbone)
+    if feature_mode == "multilayer" and adapter_checkpoint is None:
+        raise ValueError("dinov3-multilayer requires a trained 4096 -> 1024 adapter checkpoint")
 
     dinov3 = dinov3_loader()
     adapter = None
     if adapter_checkpoint is not None:
         adapter, _ = adapter_loader(adapter_checkpoint)
-        if getattr(adapter, "dim", 1024) != 1024:
-            raise ValueError("DINOv3 adapter must be 1024 -> 1024")
+        expected_input_dim = DINOV3_MULTILAYER_DIM if feature_mode == "multilayer" else DINOV3_HIDDEN_SIZE
+        input_dim = getattr(adapter, "input_dim", getattr(adapter, "dim", None))
+        output_dim = getattr(adapter, "output_dim", getattr(adapter, "dim", None))
+        if input_dim != expected_input_dim or output_dim != DINOV3_HIDDEN_SIZE:
+            raise ValueError(
+                f"DINOv3 {feature_mode} adapter must be {expected_input_dim} -> {DINOV3_HIDDEN_SIZE}; "
+                f"got {input_dim} -> {output_dim}"
+            )
         adapter.eval()
         adapter.requires_grad_(False)
 
-    model.aggregator.patch_embed = DINOv3PatchEmbed(dinov3, adapter=adapter)
+    model.aggregator.patch_embed = DINOv3PatchEmbed(
+        dinov3, adapter=adapter, feature_mode=feature_mode
+    )
     model.aggregator.patch_size = 16
     preprocess = partial(preprocess_fn, target_size=592, patch_size=16)
     return preprocess, 592, 16

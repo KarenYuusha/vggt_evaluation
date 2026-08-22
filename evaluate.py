@@ -13,15 +13,21 @@ def parse_args(argv=None):
     parser.add_argument("--dataset", choices=["co3d", "realestate10k"], required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--model", default="facebook/VGGT-1B", help="Hugging Face model id or local checkpoint")
-    parser.add_argument("--backbone", choices=["dinov2", "dinov3"], default="dinov2")
+    parser.add_argument(
+        "--backbone",
+        choices=["dinov2", "dinov3", "dinov3-final", "dinov3-multilayer"],
+        default="dinov2",
+    )
     parser.add_argument("--adapter-checkpoint", type=Path, default=None)
     parser.add_argument("--num-frames", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-scenes", type=int, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
-    if args.adapter_checkpoint is not None and args.backbone != "dinov3":
-        parser.error("--adapter-checkpoint requires --backbone dinov3")
+    if args.adapter_checkpoint is not None and args.backbone == "dinov2":
+        parser.error("--adapter-checkpoint requires a DINOv3 backbone")
+    if args.backbone == "dinov3-multilayer" and args.adapter_checkpoint is None:
+        parser.error("--backbone dinov3-multilayer requires --adapter-checkpoint")
     return args
 
 

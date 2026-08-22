@@ -1,5 +1,6 @@
 import torch
 
+from evaluation.dinov3_backbone import extract_dinov3_patch_tokens as extract_backbone_patch_tokens
 from .data import validate_feature_pair
 
 
@@ -26,19 +27,14 @@ def extract_dinov2_patch_tokens(vggt_model, images):
     return output
 
 
-def extract_dinov3_patch_tokens(dinov3_model, images):
+def extract_dinov3_patch_tokens(dinov3_model, images, feature_mode="final"):
     normalized = normalize_imagenet(images)
     with torch.inference_mode():
-        output = dinov3_model(pixel_values=normalized)
-    num_register_tokens = int(dinov3_model.config.num_register_tokens)
-    patches = output.last_hidden_state[:, 1 + num_register_tokens:]
-    if patches.ndim != 3 or patches.shape[-1] != 1024:
-        raise ValueError(f"Expected DINOv3 patch tokens shaped [N, P, 1024], got {tuple(patches.shape)}")
-    return patches
+        return extract_backbone_patch_tokens(dinov3_model, normalized, feature_mode=feature_mode)
 
 
-def extract_feature_pair(vggt_model, dinov3_model, dino2_images, dino3_images):
+def extract_feature_pair(vggt_model, dinov3_model, dino2_images, dino3_images, feature_mode="final"):
     dino2 = extract_dinov2_patch_tokens(vggt_model, dino2_images)
-    dino3 = extract_dinov3_patch_tokens(dinov3_model, dino3_images)
+    dino3 = extract_dinov3_patch_tokens(dinov3_model, dino3_images, feature_mode=feature_mode)
     validate_feature_pair(dino2, dino3)
     return dino2, dino3
