@@ -8,6 +8,7 @@ import torch
 
 from adapter.data import assert_no_clip_overlap, list_clip_dirs, split_clips, validate_feature_pair
 from adapter.features import extract_feature_pair
+from evaluation.dinov3_backbone import DINOV3_MULTILAYER_DIM, DINOV3_MULTILAYER_INDICES
 
 
 VGGT_MODEL_ID = "facebook/VGGT-1B"
@@ -25,6 +26,7 @@ def parse_args(argv=None):
     parser.add_argument("--train-count", type=int, default=90)
     parser.add_argument("--frames-per-clip", type=int, default=20)
     parser.add_argument("--image-batch-size", type=int, default=2)
+    parser.add_argument("--feature-mode", choices=["final", "multilayer"], default="multilayer")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default=None)
     return parser.parse_args(argv)
@@ -39,7 +41,7 @@ def prepare_clip_split(data_dir, evaluation_dir, expected_clips=100, train_count
 
 
 def save_clip_cache(path, clip, images, dino2, dino3):
-    validate_feature_pair(dino2, dino3)
+    validate_feature_pair(dino2, dino3, expected_dino2_dim=1024, expected_dino3_dim=dino3.shape[-1])
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
@@ -52,9 +54,10 @@ def save_clip_cache(path, clip, images, dino2, dino3):
 
 
 def build_manifest(train_clips, val_clips, seed=0, model_id=VGGT_MODEL_ID,
-                   dinov3_model_id=DINOV3_MODEL_ID, frames_per_clip=20):
+                   dinov3_model_id=DINOV3_MODEL_ID, frames_per_clip=20, feature_mode="multilayer"):
     train_names = [Path(clip).name for clip in train_clips]
     val_names = [Path(clip).name for clip in val_clips]
+    dino3_feature_dim = DINOV3_MULTILAYER_DIM if feature_mode == "multilayer" else 1024
     return {
         "seed": seed,
         "train_clips": train_names,
@@ -68,7 +71,13 @@ def build_manifest(train_clips, val_clips, seed=0, model_id=VGGT_MODEL_ID,
         "dino2_patch_size": 14,
         "dino3_target_size": 592,
         "dino3_patch_size": 16,
-        "feature_dim": 1024,
+        "feature_mode": feature_mode,
+        "dino3_layer_indices": list(DINOV3_MULTILAYER_INDICES) if feature_mode == "multilayer" else None,
+        "dino3_feature_dim": dino3_feature_dim,
+        "dino2_feature_dim": 1024,
+        "adapter_input_dim": dino3_feature_dim,
+        "adapter_output_dim": 1024,
+        "feature_dim": 1024 if feature_mode == "final" else None,
     }
 
 
@@ -102,7 +111,8 @@ def list_clip_images(clip_dir):
     return sorted(path for path in image_dir.iterdir() if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES)
 
 
-def extract_clip_features(clip_dir, teacher, dinov3, preprocess_fn, device, dtype, image_batch_size=2):
+def extract_clip_features(clip_dir, teacher, dinov3, preprocess_fn, device, dtype,
+                          image_batch_size=2, feature_mode="multilayer"):
     image_paths = list_clip_images(clip_dir)
     if not image_paths:
         raise ValueError(f"{Path(clip_dir).name}: no images found")
@@ -116,13 +126,16 @@ def extract_clip_features(clip_dir, teacher, dinov3, preprocess_fn, device, dtyp
         dino3_images = preprocess_fn(path_strings, target_size=592, patch_size=16).to(device)
         autocast = torch.autocast(device_type="cuda", dtype=dtype) if device.type == "cuda" else nullcontext()
         with autocast:
-            dino2, dino3 = extract_feature_pair(teacher, dinov3, dino2_images, dino3_images)
+            dino2, dino3 = extract_feature_pair(
+                teacher, dinov3, dino2_images, dino3_images, feature_mode=feature_mode
+            )
         dino2_batches.append(dino2.detach().cpu())
         dino3_batches.append(dino3.detach().cpu())
 
     dino2 = torch.cat(dino2_batches, dim=0)
     dino3 = torch.cat(dino3_batches, dim=0)
-    validate_feature_pair(dino2, dino3)
+    expected_dino3_dim = DINOV3_MULTILAYER_DIM if feature_mode == "multilayer" else 1024
+    validate_feature_pair(dino2, dino3, expected_dino2_dim=1024, expected_dino3_dim=expected_dino3_dim)
     return [path.name for path in image_paths], dino2, dino3
 
 
@@ -142,7 +155,8 @@ def main(argv=None):
     from vggt.utils.load_fn import load_and_preprocess_images
 
     manifest = build_manifest(
-        train_clips, val_clips, seed=args.seed, model_id=args.model, frames_per_clip=args.frames_per_clip
+        train_clips, val_clips, seed=args.seed, model_id=args.model,
+        frames_per_clip=args.frames_per_clip, feature_mode=args.feature_mode,
     )
     manifest["frames_per_clip"] = args.frames_per_clip
     manifest["image_batch_size"] = args.image_batch_size
@@ -154,10 +168,10 @@ def main(argv=None):
         for index, clip in enumerate(clips, start=1):
             images, dino2, dino3 = extract_clip_features(
                 clip, teacher, dinov3, load_and_preprocess_images, device, dtype,
-                image_batch_size=args.image_batch_size,
+                image_batch_size=args.image_batch_size, feature_mode=args.feature_mode,
             )
             save_clip_cache(split_dir / f"{clip.name}.pt", clip.name, images, dino2, dino3)
-            print(f"[{split_name} {index}/{len(clips)}] {clip.name}: {tuple(dino2.shape)}")
+            print(f"[{split_name} {index}/{len(clips)}] {clip.name}: dino2={tuple(dino2.shape)} dino3={tuple(dino3.shape)}")
 
     manifest_path = args.output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
