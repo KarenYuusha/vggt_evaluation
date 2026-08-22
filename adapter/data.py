@@ -39,10 +39,16 @@ def assert_no_clip_overlap(finetune_root, evaluation_root):
         raise ValueError(f"Finetune/evaluation clip overlap detected: {preview}")
 
 
-def validate_feature_pair(dino2, dino3, expected_dim=1024):
-    if tuple(dino2.shape) != tuple(dino3.shape):
+def validate_feature_pair(dino2, dino3, expected_dino2_dim=1024, expected_dino3_dim=None):
+    if dino2.ndim != 3 or dino3.ndim != 3:
         raise ValueError(
-            f"DINOv2 and DINOv3 features must have matching shapes, got {tuple(dino2.shape)} and {tuple(dino3.shape)}"
+            f"Expected feature tensors shaped [frames, patches, dim], got {tuple(dino2.shape)} and {tuple(dino3.shape)}"
         )
-    if dino2.ndim != 3 or dino2.shape[-1] != expected_dim:
-        raise ValueError(f"Expected feature tensors shaped [frames, patches, {expected_dim}], got {tuple(dino2.shape)}")
+    if tuple(dino2.shape[:2]) != tuple(dino3.shape[:2]):
+        raise ValueError(
+            f"DINOv2 and DINOv3 must have matching frame/patch axes, got {tuple(dino2.shape[:2])} and {tuple(dino3.shape[:2])}"
+        )
+    if expected_dino2_dim is not None and dino2.shape[-1] != expected_dino2_dim:
+        raise ValueError(f"Expected DINOv2 feature dim {expected_dino2_dim}, got {dino2.shape[-1]}")
+    if expected_dino3_dim is not None and dino3.shape[-1] != expected_dino3_dim:
+        raise ValueError(f"Expected DINOv3 feature dim {expected_dino3_dim}, got {dino3.shape[-1]}")
